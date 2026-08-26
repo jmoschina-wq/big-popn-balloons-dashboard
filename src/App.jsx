@@ -3096,6 +3096,11 @@ function AnalyticsPage({ leadStats, stats }) {
 // ---------------------------------------------------------------------------
 // Root App
 // ---------------------------------------------------------------------------
+// This dashboard has exactly one live Sheet — not a per-user preference —
+// so the connection URL ships baked in as a default. "Connect sheet" still
+// works normally if this ever needs to change (a redeploy, a new account).
+const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwzXgvGSDNuoKIn_eZPsf-d-hivXOgEei8marS0TJqfZr7wQQZq34h5ViLod5tH93Zh/exec';
+
 export default function App() {
   const [page, setPage] = useState('home');
   const [crmFilter, setCrmFilter] = useState('all');
@@ -3137,7 +3142,7 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     try {
-      const su = localStorage.getItem('sheetSourceUrl');
+      const su = localStorage.getItem('sheetSourceUrl') || DEFAULT_SHEET_URL;
       if (mounted && su) {
         setSheetUrl(su);
         syncFromSheet(su);
@@ -3285,6 +3290,19 @@ export default function App() {
       setSyncStatus('error');
     }
   };
+
+  // Background auto-refresh — on top of the manual Refresh button and the
+  // sync that already happens on page load. Every 3 minutes, quietly pulls
+  // the latest sheet data with no action needed from whoever's viewing it;
+  // the Refresh button is still there for "I need this right now."
+  useEffect(() => {
+    if (!sheetUrl) return;
+    const AUTO_REFRESH_MS = 3 * 60 * 1000; // 3 minutes
+    const intervalId = setInterval(() => {
+      syncFromSheet(sheetUrl);
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(intervalId);
+  }, [sheetUrl]);
 
   const saveSettings = async (url) => {
     setSheetUrl(url);
