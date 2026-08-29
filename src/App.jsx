@@ -538,6 +538,9 @@ function makeLead(fields) {
     email: fields.email || '',
     eventType: fields.eventType || 'Special Occasion',
     eventDate: fields.eventDate || '',
+    address: fields.address || '',
+    package: fields.package || '',
+    colors: fields.colors || '',
     estValue: fields.estValue !== undefined && fields.estValue !== '' ? Number(fields.estValue) : 0,
     source: fields.source || 'Other',
     owner: fields.owner && fields.owner.trim() ? fields.owner.trim() : 'Unassigned',
@@ -664,10 +667,12 @@ function leadToSheetRow(lead) {
     email: lead.email || '',
     phone: lead.phone || '',
     eventDate: lead.eventDate || '',
-    address: '',
+    address: lead.address || '',
     occasion: lead.eventType || '',
-    package: (lead.notes && lead.notes.trim()) ? lead.notes.trim().slice(0, 120) : 'Booked from Lead Pipeline',
-    colors: '',
+    package: (lead.package && lead.package.trim())
+      ? lead.package.trim().slice(0, 120)
+      : ((lead.notes && lead.notes.trim()) ? lead.notes.trim().slice(0, 120) : 'Booked from Lead Pipeline'),
+    colors: lead.colors || '',
     amount: Number(lead.estValue) || 0,
   };
 }
@@ -3652,4 +3657,3 @@ export default function App() {
       )}
     </div>
   );
-}
