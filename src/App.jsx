@@ -491,17 +491,20 @@ function computeCampaignRows(campaign, clients, activity) {
   } else {
     const byKey = {};
     clients.forEach(c => { byKey[c.k] = c; });
+    // A scheduled campaign counts from its scheduled date, not from when it
+    // was actually created — nothing shows as due until that date arrives.
+    const effectiveStart = campaign.scheduledStart || campaign.createdAt;
     // Audience = anyone matching the filters at creation time, PLUS anyone
     // individually added by name — union, deduped by key.
     const seenKeys = new Set();
     candidates = [];
     (campaign.audienceKeys || []).forEach(k => {
       const c = byKey[k];
-      if (c && c.email && !seenKeys.has(k)) { seenKeys.add(k); candidates.push({ client: c, startDate: campaign.createdAt }); }
+      if (c && c.email && !seenKeys.has(k)) { seenKeys.add(k); candidates.push({ client: c, startDate: effectiveStart }); }
     });
     (campaign.manualKeys || []).forEach(k => {
       const c = byKey[k];
-      if (c && c.email && !seenKeys.has(k)) { seenKeys.add(k); candidates.push({ client: c, startDate: campaign.createdAt }); }
+      if (c && c.email && !seenKeys.has(k)) { seenKeys.add(k); candidates.push({ client: c, startDate: effectiveStart }); }
     });
   }
 
@@ -1917,6 +1920,8 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
   const [emails, setEmails] = useState(DEFAULT_EMAIL_TEMPLATES);
   const [manualKeys, setManualKeys] = useState([]); // individually-added clients, broadcast mode only
   const [customerSearch, setCustomerSearch] = useState('');
+  const [sendTiming, setSendTiming] = useState('now'); // 'now' | 'scheduled' — broadcast mode only
+  const [scheduledDate, setScheduledDate] = useState('');
 
   const eventTypeOptions = useMemo(() => {
     const set = new Set(clients.map(c => c.lastOcc).filter(Boolean));
@@ -1989,7 +1994,8 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
   };
 
   const emailsFilledOut = emails.slice(0, numEmails).every(e => e.subject.trim() && e.body.trim());
-  const canCreate = name.trim().length > 0 && audience.length > 0 && emailsFilledOut;
+  const scheduleValid = mode !== 'broadcast' || sendTiming !== 'scheduled' || !!scheduledDate;
+  const canCreate = name.trim().length > 0 && audience.length > 0 && emailsFilledOut && scheduleValid;
 
   const handleCreate = () => {
     if (!canCreate) return;
@@ -2008,6 +2014,7 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
       audienceKeys: mode === 'broadcast' ? audience.map(c => c.k) : [],
       audienceCount: audience.length,
       createdAt: new Date().toISOString().slice(0, 10),
+      scheduledStart: (mode === 'broadcast' && sendTiming === 'scheduled' && scheduledDate) ? scheduledDate : null,
       emails: emails.slice(0, numEmails),
     });
     setName('');
@@ -2019,6 +2026,8 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
     setThresholds([0]);
     setEmails(DEFAULT_EMAIL_TEMPLATES);
     setManualKeys([]);
+    setSendTiming('now');
+    setScheduledDate('');
     if (onCreated) onCreated(newId);
   };
 
@@ -2085,6 +2094,51 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
           </button>
         </div>
       </div>
+
+      {mode === 'broadcast' && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
+            When Should This Send?
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              onClick={() => setSendTiming('now')}
+              style={{
+                padding: '9px 16px', borderRadius: 999, cursor: 'pointer',
+                border: sendTiming === 'now' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                background: sendTiming === 'now' ? 'rgba(214,169,74,0.08)' : '#fff',
+                fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, color: COLORS.ink,
+              }}
+            >Send Now</button>
+            <button
+              onClick={() => setSendTiming('scheduled')}
+              style={{
+                padding: '9px 16px', borderRadius: 999, cursor: 'pointer',
+                border: sendTiming === 'scheduled' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                background: sendTiming === 'scheduled' ? 'rgba(214,169,74,0.08)' : '#fff',
+                fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, color: COLORS.ink,
+              }}
+            >Schedule for a Date</button>
+            {sendTiming === 'scheduled' && (
+              <input
+                type="date"
+                value={scheduledDate}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setScheduledDate(e.target.value)}
+                style={{
+                  padding: '9px 12px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
+                  fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink, outline: 'none',
+                }}
+              />
+            )}
+          </div>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11, color: COLORS.inkSoft, marginTop: 6 }}>
+            {sendTiming === 'now'
+              ? "Everyone's countdown (and any \"due immediately\" emails) starts the moment you click Create Campaign."
+              : "Nothing will show as due until the scheduled date arrives — day-offsets below count from that date, not from today."}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         {mode === 'rolling' && (
@@ -2258,6 +2312,8 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
   const [draftEventTypeFilter, setDraftEventTypeFilter] = useState(campaign.filters.eventType);
   const [draftThresholds, setDraftThresholds] = useState(campaign.thresholds);
   const isCancelled = campaign.status === 'cancelled';
+  const isScheduledFuture = campaign.mode === 'broadcast' && campaign.scheduledStart
+    && new Date(campaign.scheduledStart + 'T00:00:00') > new Date(new Date().toDateString());
 
   const eventTypeOptions = useMemo(() => {
     const set = new Set(clients.map(c => c.lastOcc).filter(Boolean));
@@ -2334,11 +2390,17 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
                 background: 'rgba(239,138,160,0.18)', color: COLORS.roseDeep, fontFamily: 'Manrope, sans-serif',
               }}>{dueCount} due now</span>
             )}
-            {stopped && (
+            {isCancelled && (
               <span style={{
                 fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 999,
                 background: 'rgba(178,178,178,0.25)', color: COLORS.inkSoft, fontFamily: 'Manrope, sans-serif',
               }}>Cancelled — no further sends</span>
+            )}
+            {isScheduledFuture && (
+              <span style={{
+                fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 999,
+                background: 'rgba(167,150,217,0.18)', color: COLORS.lavenderDeep, fontFamily: 'Manrope, sans-serif',
+              }}>Scheduled for {fmtDate(campaign.scheduledStart)}</span>
             )}
           </div>
           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4 }}>
@@ -2363,14 +2425,14 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             }}
           >Edit Details</button>
           <button
-            onClick={() => onUpdateCampaign(campaign.id, { status: stopped ? 'active' : 'cancelled' })}
+            onClick={() => onUpdateCampaign(campaign.id, { status: isCancelled ? 'active' : 'cancelled' })}
             style={{
-              padding: '8px 14px', borderRadius: 8, border: `1px solid ${stopped ? COLORS.teal : COLORS.line}`,
-              background: stopped ? 'rgba(79,182,168,0.1)' : '#fff',
+              padding: '8px 14px', borderRadius: 8, border: `1px solid ${isCancelled ? COLORS.teal : COLORS.line}`,
+              background: isCancelled ? 'rgba(79,182,168,0.1)' : '#fff',
               fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
-              color: stopped ? COLORS.teal : COLORS.roseDeep,
+              color: isCancelled ? COLORS.teal : COLORS.roseDeep,
             }}
-          >{stopped ? 'Resume Campaign' : 'Stop Campaign'}</button>
+          >{isCancelled ? 'Resume Campaign' : 'Stop Campaign'}</button>
           <button
             onClick={() => onRemove(campaign.id)}
             style={{
@@ -2462,7 +2524,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             ))}
           </div>
 
-          {campaign.mode === 'broadcast' && !stopped && (
+          {campaign.mode === 'broadcast' && !isCancelled && (
             <div style={{ marginBottom: 18 }}>
               <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
                 Send This Blast
