@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
@@ -480,6 +480,7 @@ function computeCampaignRows(campaign, clients, activity) {
   const today = new Date();
   const todayD = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const thresholds = campaign.thresholds || computeCampaignThresholds(campaign.numEmails, campaign.lengthDays);
+  const stopped = campaign.status === 'cancelled';
 
   let candidates;
   if (campaign.mode === 'rolling') {
@@ -490,10 +491,18 @@ function computeCampaignRows(campaign, clients, activity) {
   } else {
     const byKey = {};
     clients.forEach(c => { byKey[c.k] = c; });
-    candidates = (campaign.audienceKeys || [])
-      .map(k => byKey[k])
-      .filter(c => c && c.email)
-      .map(c => ({ client: c, startDate: campaign.createdAt }));
+    // Audience = anyone matching the filters at creation time, PLUS anyone
+    // individually added by name — union, deduped by key.
+    const seenKeys = new Set();
+    candidates = [];
+    (campaign.audienceKeys || []).forEach(k => {
+      const c = byKey[k];
+      if (c && c.email && !seenKeys.has(k)) { seenKeys.add(k); candidates.push({ client: c, startDate: campaign.createdAt }); }
+    });
+    (campaign.manualKeys || []).forEach(k => {
+      const c = byKey[k];
+      if (c && c.email && !seenKeys.has(k)) { seenKeys.add(k); candidates.push({ client: c, startDate: campaign.createdAt }); }
+    });
   }
 
   return candidates
@@ -501,7 +510,9 @@ function computeCampaignRows(campaign, clients, activity) {
       const start = new Date(startDate + 'T00:00:00');
       const daysSinceStart = Math.round((todayD - start) / 86400000);
       const stage = (activity && activity[c.k]) || 'none';
-      const action = getGenericCampaignAction(daysSinceStart, thresholds, campaign.numEmails, stage);
+      const action = stopped
+        ? { nextEmailNum: null, isDue: false, done: false }
+        : getGenericCampaignAction(daysSinceStart, thresholds, campaign.numEmails, stage);
       return { k: c.k, name: c.name, email: c.email, occasion: c.lastOcc || 'event', daysSinceStart, stage, ...action };
     })
     .sort((a, b) => (b.isDue - a.isDue) || (a.name || '').localeCompare(b.name || ''));
@@ -1238,11 +1249,12 @@ function ColumnFilterSelect({ label, value, onChange, options }) {
 }
 
 
-function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastContacted, updateLastContacted, expanded, setExpanded, upcomingKeys, typeFilter, setTypeFilter, stateFilter, setStateFilter, eventTypeFilter, setEventTypeFilter }) {
+function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastContacted, updateLastContacted, expanded, setExpanded, upcomingKeys, typeFilter, setTypeFilter, stateFilter, setStateFilter, eventTypeFilter, setEventTypeFilter, crmKeyFilter, crmKeyFilterLabel, onClearKeyFilter }) {
   const [pageNum, setPageNum] = useState(0);
   const upcomingMonthName = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleString('en-US', { month: 'long' });
 
   const upcomingSet = useMemo(() => new Set(upcomingKeys), [upcomingKeys]);
+  const keyFilterSet = useMemo(() => crmKeyFilter ? new Set(crmKeyFilter) : null, [crmKeyFilter]);
 
   const eventTypeOptions = useMemo(() => {
     const set = new Set(clients.map(c => c.lastOcc).filter(Boolean));
@@ -1251,10 +1263,13 @@ function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastCo
 
   const filtered = useMemo(() => {
     let list = clients;
+    // A campaign's "View in CRM" scopes to its exact real audience — take
+    // priority over everything else, since that's the whole point of it.
+    if (keyFilterSet) list = list.filter(c => keyFilterSet.has(c.k));
     if (filter === 'repeat') list = list.filter(c => c.type === 'Repeat');
     if (filter === 'first') list = list.filter(c => c.type === 'First-Time');
     if (filter === 'upcoming') list = list.filter(c => upcomingSet.has(c.k));
-    list = list.filter(c => clientMatchesFilters(c, { type: typeFilter, state: stateFilter, eventType: eventTypeFilter }));
+    if (!keyFilterSet) list = list.filter(c => clientMatchesFilters(c, { type: typeFilter, state: stateFilter, eventType: eventTypeFilter }));
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(c =>
@@ -1264,9 +1279,9 @@ function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastCo
       );
     }
     return list;
-  }, [clients, filter, search, upcomingSet, typeFilter, stateFilter, eventTypeFilter]);
+  }, [clients, filter, search, upcomingSet, typeFilter, stateFilter, eventTypeFilter, keyFilterSet]);
 
-  useEffect(() => { setPageNum(0); }, [filter, search, typeFilter, stateFilter, eventTypeFilter]);
+  useEffect(() => { setPageNum(0); }, [filter, search, typeFilter, stateFilter, eventTypeFilter, crmKeyFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageItems = filtered.slice(pageNum * PAGE_SIZE, pageNum * PAGE_SIZE + PAGE_SIZE);
@@ -1290,6 +1305,25 @@ function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastCo
           Contact info, order history, and lifetime value for every client on record.
         </div>
       </div>
+
+      {keyFilterSet && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+          background: 'rgba(214,169,74,0.1)', border: `1px solid ${COLORS.gold}`, borderRadius: 10,
+          padding: '10px 16px', marginBottom: 16,
+        }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink }}>
+            Showing this campaign's exact audience: <strong>{crmKeyFilterLabel || 'Campaign'}</strong> ({filtered.length} client{filtered.length === 1 ? '' : 's'})
+          </div>
+          <button
+            onClick={onClearKeyFilter}
+            style={{
+              padding: '6px 14px', borderRadius: 8, border: `1px solid ${COLORS.gold}`, background: '#fff',
+              fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: COLORS.goldDeep,
+            }}
+          >Clear — show all customers</button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <div style={{
@@ -1508,10 +1542,94 @@ function StageBadge({ stage }) {
 // Built-in Re-Engagement campaign, now shown as a collapsed summary card in
 // the Active Campaigns list — same visual family as custom campaigns —
 // which expands on click to reveal the full due-tracking table.
+
+// Strips a rich-text (HTML) email body down to plain text for Gmail's
+// quick-compose link — Gmail's "body=" URL parameter only accepts plain
+// text, so any bold/color/list formatting can't carry into the actual
+// compose window. Line breaks are preserved; formatting itself is not.
+function htmlToPlainText(html) {
+  if (!html) return '';
+  const withBreaks = html
+    .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n');
+  const tmp = document.createElement('div');
+  tmp.innerHTML = withBreaks;
+  const text = tmp.textContent || tmp.innerText || '';
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const RICH_TEXT_FONT_SIZES = [
+  { label: 'Small', value: '2' },
+  { label: 'Normal', value: '3' },
+  { label: 'Large', value: '5' },
+  { label: 'X-Large', value: '6' },
+];
+
+// A minimal rich-text editor with no external library — uses the browser's
+// own contentEditable + execCommand, which is all a formatting toolbar this
+// simple needs. Remounts (via the `resetKey` prop) when switching between
+// different emails/campaigns, so the DOM's own cursor state never has to be
+// fought with on every keystroke.
+function RichTextEditor({ value, onChange, placeholder, resetKey }) {
+  const editorRef = useRef(null);
+
+  useEffect(() => {
+    if (editorRef.current) editorRef.current.innerHTML = value || '';
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
+
+  const exec = (command, arg) => {
+    if (editorRef.current) editorRef.current.focus();
+    document.execCommand(command, false, arg);
+    if (editorRef.current) onChange(editorRef.current.innerHTML);
+  };
+
+  const toolBtnStyle = {
+    padding: '5px 8px', borderRadius: 6, border: `1px solid ${COLORS.line}`, background: '#fff',
+    fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', color: COLORS.ink,
+    lineHeight: 1,
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
+        <button type="button" onClick={() => exec('bold')} style={{ ...toolBtnStyle, fontWeight: 900 }} title="Bold">B</button>
+        <button type="button" onClick={() => exec('italic')} style={{ ...toolBtnStyle, fontStyle: 'italic' }} title="Italic">I</button>
+        <button type="button" onClick={() => exec('underline')} style={{ ...toolBtnStyle, textDecoration: 'underline' }} title="Underline">U</button>
+        <select
+          onChange={(e) => { if (e.target.value) exec('fontSize', e.target.value); e.target.value = ''; }}
+          defaultValue=""
+          title="Font size"
+          style={{ ...toolBtnStyle, cursor: 'pointer' }}
+        >
+          <option value="" disabled>Size</option>
+          {RICH_TEXT_FONT_SIZES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <button type="button" onClick={() => exec('insertUnorderedList')} style={toolBtnStyle} title="Bullet list">• List</button>
+        <button type="button" onClick={() => exec('insertOrderedList')} style={toolBtnStyle} title="Numbered list">1. List</button>
+        <button type="button" onClick={() => exec('removeFormat')} style={toolBtnStyle} title="Clear formatting">Clear</button>
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={(e) => onChange(e.currentTarget.innerHTML)}
+        data-placeholder={placeholder}
+        style={{
+          width: '100%', minHeight: 110, padding: '8px 10px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
+          fontFamily: 'Manrope, sans-serif', fontSize: 12, color: COLORS.ink, outline: 'none',
+          boxSizing: 'border-box', lineHeight: 1.6, background: '#fff', overflowY: 'auto',
+        }}
+      />
+      <style>{`[contenteditable]:empty:before { content: attr(data-placeholder); color: ${COLORS.inkSoft}; }`}</style>
+    </div>
+  );
+}
+
 // Editable subject/body box used inside every campaign's expanded "Email
 // Copy" section — same component whether it's Re-Engagement or a custom
 // campaign, so editing feels identical everywhere.
-function EditableEmailCopy({ index, subject, body, onChangeSubject, onChangeBody }) {
+function EditableEmailCopy({ index, subject, body, onChangeSubject, onChangeBody, resetKey }) {
   return (
     <div style={{ background: '#fff', border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 12 }}>
       <span style={{
@@ -1528,18 +1646,16 @@ function EditableEmailCopy({ index, subject, body, onChangeSubject, onChangeBody
           boxSizing: 'border-box', marginTop: 8, marginBottom: 6,
         }}
       />
-      <textarea
+      <RichTextEditor
         value={body}
-        onChange={(e) => onChangeBody(e.target.value)}
+        onChange={onChangeBody}
         placeholder="Email body"
-        rows={5}
-        style={{
-          width: '100%', padding: '8px 10px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
-          fontFamily: 'Manrope, sans-serif', fontSize: 12, color: COLORS.ink, outline: 'none',
-          boxSizing: 'border-box', resize: 'vertical', lineHeight: 1.6,
-        }}
+        resetKey={resetKey || index}
       />
       <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, color: COLORS.inkSoft, marginTop: 5 }}>
+        Formatting shown here is for your reference while drafting — Gmail's one-click send opens as plain text, so bold/colors won't carry over automatically.
+      </div>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, color: COLORS.inkSoft, marginTop: 3 }}>
         Merge fields: <code style={{ background: COLORS.cream, padding: '1px 5px', borderRadius: 4 }}>{'{{firstName}}'}</code>{' '}
         <code style={{ background: COLORS.cream, padding: '1px 5px', borderRadius: 4 }}>{'{{occasion}}'}</code>{' '}
         <code style={{ background: COLORS.cream, padding: '1px 5px', borderRadius: 4 }}>{'{{campaignName}}'}</code>
@@ -1601,7 +1717,7 @@ function ReEngagePage({ anniversaries, campaignStage, updateCampaignStage, onVie
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
           <button
-            onClick={() => onViewCrm && onViewCrm({ type: 'Repeat', state: 'all', eventType: 'all' })}
+            onClick={() => onViewCrm && onViewCrm(rows.map(r => r.k), 'Client Re-Engagement Campaign')}
             style={{
               padding: '8px 14px', borderRadius: 8, border: `1px solid ${COLORS.line}`, background: '#fff',
               fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', color: COLORS.ink,
@@ -1669,7 +1785,7 @@ function ReEngagePage({ anniversaries, campaignStage, updateCampaignStage, onVie
             {visibleRows.map(r => {
               const template = r.nextEmailNum ? emails[r.nextEmailNum - 1] : null;
               const mergeData = { firstName: (r.name || '').trim().split(' ')[0] || 'there', occasion: (r.occasion || 'event').toLowerCase(), campaignName: 'Client Re-Engagement Campaign' };
-              const email = template ? { subject: fillTemplate(template.subject, mergeData), body: fillTemplate(template.body, mergeData) } : null;
+              const email = template ? { subject: fillTemplate(template.subject, mergeData), body: htmlToPlainText(fillTemplate(template.body, mergeData)) } : null;
               return (
                 <div key={r.k} style={{
                   display: 'grid', gridTemplateColumns: '1.15fr 0.7fr 0.85fr 0.65fr 0.95fr 1.6fr',
@@ -1788,7 +1904,7 @@ function ThresholdInput({ index, value, onChange }) {
   );
 }
 
-function CampaignBuilder({ clients, onCreateCampaign }) {
+function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
   const [name, setName] = useState('');
   const [mode, setMode] = useState('broadcast'); // 'broadcast' | 'rolling'
   const [triggerField, setTriggerField] = useState('firstDate');
@@ -1799,6 +1915,8 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
   const [stateFilter, setStateFilter] = useState('all');
   const [eventTypeFilter, setEventTypeFilter] = useState('all');
   const [emails, setEmails] = useState(DEFAULT_EMAIL_TEMPLATES);
+  const [manualKeys, setManualKeys] = useState([]); // individually-added clients, broadcast mode only
+  const [customerSearch, setCustomerSearch] = useState('');
 
   const eventTypeOptions = useMemo(() => {
     const set = new Set(clients.map(c => c.lastOcc).filter(Boolean));
@@ -1806,7 +1924,30 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
   }, [clients]);
 
   const filters = { type: typeFilter, state: stateFilter, eventType: eventTypeFilter };
-  const audience = useMemo(() => clients.filter(c => clientMatchesFilters(c, filters)), [clients, typeFilter, stateFilter, eventTypeFilter]);
+  const filterMatched = useMemo(() => clients.filter(c => clientMatchesFilters(c, filters)), [clients, typeFilter, stateFilter, eventTypeFilter]);
+
+  // Final audience = filter-matched clients, plus any individually hand-picked
+  // ones — de-duplicated, since someone might match both ways.
+  const audience = useMemo(() => {
+    if (mode !== 'broadcast') return filterMatched;
+    const byKey = new Map(filterMatched.map(c => [c.k, c]));
+    manualKeys.forEach(k => {
+      if (!byKey.has(k)) {
+        const c = clients.find(cl => cl.k === k);
+        if (c) byKey.set(k, c);
+      }
+    });
+    return Array.from(byKey.values());
+  }, [filterMatched, manualKeys, clients, mode]);
+
+  const customerSearchResults = useMemo(() => {
+    const q = customerSearch.trim().toLowerCase();
+    if (!q) return [];
+    return clients
+      .filter(c => !manualKeys.includes(c.k))
+      .filter(c => (c.name || '').toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [customerSearch, clients, manualKeys]);
 
   const setNumEmailsClamped = (n) => {
     setNumEmails(n);
@@ -1815,8 +1956,15 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
       while (next.length < n) next.push({ subject: '', body: '' });
       return next;
     });
-    // Re-seed day offsets with even spacing as a starting point — still editable after.
-    setThresholds(computeCampaignThresholds(n, lengthDays));
+    // Ongoing campaigns still get even-spacing convenience from the length
+    // dropdown; one-time sends default new emails to "immediately" (day 0)
+    // and are set individually — no length dropdown to drive them.
+    setThresholds(prev => {
+      if (mode === 'rolling') return computeCampaignThresholds(n, lengthDays);
+      const next = prev.slice(0, n);
+      while (next.length < n) next.push(0);
+      return next;
+    });
   };
 
   const setLengthDaysAndReseed = (days) => {
@@ -1832,20 +1980,31 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
     setEmails(prev => prev.map((e, i) => i === idx ? { ...e, [field]: value } : e));
   };
 
+  const addManualCustomer = (key) => {
+    setManualKeys(prev => prev.includes(key) ? prev : [...prev, key]);
+    setCustomerSearch('');
+  };
+  const removeManualCustomer = (key) => {
+    setManualKeys(prev => prev.filter(k => k !== key));
+  };
+
   const emailsFilledOut = emails.slice(0, numEmails).every(e => e.subject.trim() && e.body.trim());
   const canCreate = name.trim().length > 0 && audience.length > 0 && emailsFilledOut;
 
   const handleCreate = () => {
     if (!canCreate) return;
+    const newId = 'campaign-' + Date.now();
     onCreateCampaign({
-      id: 'campaign-' + Date.now(),
+      id: newId,
       name: name.trim(),
       mode,
+      status: 'active',
       triggerField: mode === 'rolling' ? triggerField : null,
       lengthDays,
       numEmails,
       thresholds,
       filters,
+      manualKeys: mode === 'broadcast' ? manualKeys : [],
       audienceKeys: mode === 'broadcast' ? audience.map(c => c.k) : [],
       audienceCount: audience.length,
       createdAt: new Date().toISOString().slice(0, 10),
@@ -1859,6 +2018,8 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
     setNumEmails(1);
     setThresholds([0]);
     setEmails(DEFAULT_EMAIL_TEMPLATES);
+    setManualKeys([]);
+    if (onCreated) onCreated(newId);
   };
 
   const startLabel = mode === 'rolling'
@@ -1932,9 +2093,11 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
             <option value="lastDate">Client's Most Recent Order</option>
           </FormSelect>
         )}
-        <FormSelect label="Default Spacing" value={lengthDays} onChange={(v) => setLengthDaysAndReseed(parseInt(v, 10))}>
-          {CAMPAIGN_LENGTH_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </FormSelect>
+        {mode === 'rolling' && (
+          <FormSelect label="Default Spacing" value={lengthDays} onChange={(v) => setLengthDaysAndReseed(parseInt(v, 10))}>
+            {CAMPAIGN_LENGTH_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </FormSelect>
+        )}
         <FormSelect label="Number of Emails" value={numEmails} onChange={(v) => setNumEmailsClamped(parseInt(v, 10))}>
           {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n} Email{n === 1 ? '' : 's'}</option>)}
         </FormSelect>
@@ -1954,11 +2117,69 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
         </FormSelect>
       </div>
 
+      {mode === 'broadcast' && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6 }}>
+            Add Individual Customers
+          </div>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
+            On top of the filters above — search by name or email to add specific people regardless of whether they match.
+          </div>
+          <div style={{ position: 'relative' }}>
+            <input
+              value={customerSearch}
+              onChange={(e) => setCustomerSearch(e.target.value)}
+              placeholder="Search customers by name or email..."
+              style={{
+                width: '100%', padding: '9px 12px', borderRadius: 9, border: `1px solid ${COLORS.line}`,
+                fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink, outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+            {customerSearchResults.length > 0 && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: '#fff',
+                border: `1px solid ${COLORS.line}`, borderRadius: 9, boxShadow: '0 6px 16px rgba(42,36,64,0.1)',
+                zIndex: 5, maxHeight: 220, overflowY: 'auto',
+              }}>
+                {customerSearchResults.map(c => (
+                  <div
+                    key={c.k}
+                    onClick={() => addManualCustomer(c.k)}
+                    style={{ padding: '9px 12px', cursor: 'pointer', borderBottom: `1px solid ${COLORS.line}` }}
+                  >
+                    <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, fontWeight: 700, color: COLORS.ink }}>{c.name}</div>
+                    <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft }}>{c.email}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {manualKeys.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+              {manualKeys.map(k => {
+                const c = clients.find(cl => cl.k === k);
+                return (
+                  <span key={k} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 10px', borderRadius: 999,
+                    background: 'rgba(167,150,217,0.15)', color: COLORS.lavenderDeep, fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 600,
+                  }}>
+                    {c ? c.name : k}
+                    <button onClick={() => removeManualCustomer(k)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: COLORS.lavenderDeep, display: 'flex' }}>
+                      <X size={12} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
         Email Copy &amp; Timing
       </div>
       <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
-        "Default Spacing" pre-fills the day offsets below evenly — each one is still editable.
+        Set each email's day offset directly below — 0 means it sends immediately from {startLabel}.
         Merge fields: <code style={{ background: COLORS.cream, padding: '1px 5px', borderRadius: 4 }}>{'{{firstName}}'}</code>{' '}
         <code style={{ background: COLORS.cream, padding: '1px 5px', borderRadius: 4 }}>{'{{occasion}}'}</code>{' '}
         <code style={{ background: COLORS.cream, padding: '1px 5px', borderRadius: 4 }}>{'{{campaignName}}'}</code>
@@ -1986,16 +2207,11 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
                 boxSizing: 'border-box', marginBottom: 6, background: '#fff',
               }}
             />
-            <textarea
+            <RichTextEditor
               value={emails[i]?.body || ''}
-              onChange={(e) => updateEmailField(i, 'body', e.target.value)}
+              onChange={(html) => updateEmailField(i, 'body', html)}
               placeholder="Email body"
-              rows={4}
-              style={{
-                width: '100%', padding: '8px 10px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
-                fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.ink, outline: 'none',
-                boxSizing: 'border-box', resize: 'vertical', background: '#fff',
-              }}
+              resetKey={`new-${i}`}
             />
           </div>
         ))}
@@ -2008,6 +2224,7 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
         <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink }}>
           <strong style={{ color: audience.length > 0 ? COLORS.goldDeep : COLORS.inkSoft }}>{audience.length}</strong> matching client{audience.length === 1 ? '' : 's'}
           {mode === 'rolling' && <span style={{ color: COLORS.inkSoft }}> right now — this list will grow as more clients qualify</span>}
+          {mode === 'broadcast' && manualKeys.length > 0 && <span style={{ color: COLORS.inkSoft }}> (includes {manualKeys.length} individually added)</span>}
         </div>
         <button
           onClick={handleCreate}
@@ -2031,8 +2248,8 @@ function CampaignBuilder({ clients, onCreateCampaign }) {
 // due-tracking table just like Re-Engagement: preview the merged email,
 // open it in Gmail, mark it sent. Stage is tracked per (campaign, client)
 // and saved to the Sheet.
-function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView, onRemove, onUpdateEmail, onUpdateCampaign }) {
-  const [expanded, setExpanded] = useState(false);
+function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView, onRemove, onUpdateEmail, onUpdateCampaign, autoExpand }) {
+  const [expanded, setExpanded] = useState(!!autoExpand);
   const [dueOnly, setDueOnly] = useState(true);
   const [editingDetails, setEditingDetails] = useState(false);
   const [draftName, setDraftName] = useState(campaign.name);
@@ -2040,6 +2257,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
   const [draftStateFilter, setDraftStateFilter] = useState(campaign.filters.state);
   const [draftEventTypeFilter, setDraftEventTypeFilter] = useState(campaign.filters.eventType);
   const [draftThresholds, setDraftThresholds] = useState(campaign.thresholds);
+  const isCancelled = campaign.status === 'cancelled';
 
   const eventTypeOptions = useMemo(() => {
     const set = new Set(clients.map(c => c.lastOcc).filter(Boolean));
@@ -2116,6 +2334,12 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
                 background: 'rgba(239,138,160,0.18)', color: COLORS.roseDeep, fontFamily: 'Manrope, sans-serif',
               }}>{dueCount} due now</span>
             )}
+            {stopped && (
+              <span style={{
+                fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 999,
+                background: 'rgba(178,178,178,0.25)', color: COLORS.inkSoft, fontFamily: 'Manrope, sans-serif',
+              }}>Cancelled — no further sends</span>
+            )}
           </div>
           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4 }}>
             {liveCount} client{liveCount === 1 ? '' : 's'}
@@ -2125,7 +2349,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
           <button
-            onClick={() => onView(campaign.filters)}
+            onClick={() => onView(rows.map(r => r.k), campaign.name)}
             style={{
               padding: '8px 14px', borderRadius: 8, border: `1px solid ${COLORS.line}`, background: '#fff',
               fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', color: COLORS.ink,
@@ -2138,6 +2362,15 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
               fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', color: COLORS.ink,
             }}
           >Edit Details</button>
+          <button
+            onClick={() => onUpdateCampaign(campaign.id, { status: stopped ? 'active' : 'cancelled' })}
+            style={{
+              padding: '8px 14px', borderRadius: 8, border: `1px solid ${stopped ? COLORS.teal : COLORS.line}`,
+              background: stopped ? 'rgba(79,182,168,0.1)' : '#fff',
+              fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+              color: stopped ? COLORS.teal : COLORS.roseDeep,
+            }}
+          >{stopped ? 'Resume Campaign' : 'Stop Campaign'}</button>
           <button
             onClick={() => onRemove(campaign.id)}
             style={{
@@ -2229,6 +2462,40 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             ))}
           </div>
 
+          {campaign.mode === 'broadcast' && !stopped && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
+                Send This Blast
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {campaign.emails.map((tpl, i) => {
+                  const dueForThis = rows.filter(r => r.isDue && r.nextEmailNum === i + 1);
+                  if (dueForThis.length === 0) return null;
+                  const genericData = { firstName: 'there', occasion: 'your upcoming event', campaignName: campaign.name };
+                  const subject = fillTemplate(tpl.subject, genericData);
+                  const body = htmlToPlainText(fillTemplate(tpl.body, genericData));
+                  const bcc = dueForThis.map(r => r.email).join(',');
+                  return (
+                    <a
+                      key={i}
+                      href={`https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bcc)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`}
+                      target="_blank" rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                        padding: '10px 18px', borderRadius: 999, border: 'none', background: COLORS.navy, color: '#fff',
+                        fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                        textDecoration: 'none', width: 'fit-content',
+                      }}
+                    >Send Email {i + 1} to All {dueForThis.length} via Gmail (BCC)</a>
+                  );
+                })}
+              </div>
+              <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, color: COLORS.inkSoft, marginTop: 6 }}>
+                Opens Gmail with everyone currently due BCC'd and the copy pre-filled with generic wording (no per-person name/occasion, since a single BCC'd email can't personalize per recipient) — review before sending. Very large audiences may hit a browser link-length limit; if the link doesn't open, send in smaller batches from the Recipients list below instead.
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
               Recipients ({rows.length})
@@ -2264,7 +2531,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             {visibleRows.map(r => {
               const template = r.nextEmailNum ? campaign.emails[r.nextEmailNum - 1] : null;
               const mergeData = { firstName: (r.name || '').trim().split(' ')[0] || 'there', occasion: (r.occasion || 'event').toLowerCase(), campaignName: campaign.name };
-              const email = template ? { subject: fillTemplate(template.subject, mergeData), body: fillTemplate(template.body, mergeData) } : null;
+              const email = template ? { subject: fillTemplate(template.subject, mergeData), body: htmlToPlainText(fillTemplate(template.body, mergeData)) } : null;
               return (
                 <div key={r.k} style={{
                   display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.7fr 1.6fr',
@@ -2322,6 +2589,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
 // Re-Engagement plus any custom ones) and the campaign builder.
 // ---------------------------------------------------------------------------
 function EmailMarketingPage({ anniversaries, campaignStage, updateCampaignStage, clients, customCampaigns, campaignActivity, onCreateCampaign, onRemoveCampaign, onViewCampaign, onUpdateCampaignActivity, reEngageEmails, onUpdateReEngageEmail, onUpdateCampaignEmail, onUpdateCampaign }) {
+  const [newlyCreatedId, setNewlyCreatedId] = useState(null);
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
@@ -2345,12 +2613,13 @@ function EmailMarketingPage({ anniversaries, campaignStage, updateCampaignStage,
             onView={onViewCampaign} onRemove={onRemoveCampaign}
             onUpdateEmail={onUpdateCampaignEmail}
             onUpdateCampaign={onUpdateCampaign}
+            autoExpand={c.id === newlyCreatedId}
           />
         ))}
       </div>
 
       <div style={{ marginTop: 80 }}>
-        <CampaignBuilder clients={clients} onCreateCampaign={onCreateCampaign} />
+        <CampaignBuilder clients={clients} onCreateCampaign={onCreateCampaign} onCreated={setNewlyCreatedId} />
       </div>
     </div>
   );
@@ -3120,6 +3389,8 @@ export default function App() {
   const [crmTypeFilter, setCrmTypeFilter] = useState('all');
   const [crmStateFilter, setCrmStateFilter] = useState('all');
   const [crmEventTypeFilter, setCrmEventTypeFilter] = useState('all');
+  const [crmKeyFilter, setCrmKeyFilter] = useState(null); // exact audience keys from a campaign's "View in CRM", or null for normal browsing
+  const [crmKeyFilterLabel, setCrmKeyFilterLabel] = useState('');
   const [sheetUrl, setSheetUrl] = useState('');
   const [liveOrders, setLiveOrders] = useState(LIVE_SNAPSHOT);
   const [syncStatus, setSyncStatus] = useState('not-configured'); // not-configured | loading | success | error
@@ -3332,18 +3603,24 @@ export default function App() {
     setPage('crm');
     setCrmFilter(filterId);
     setSearch('');
+    setCrmKeyFilter(null);
+    setCrmKeyFilterLabel('');
   };
   const goToUpcoming = () => goToCrmFilter('upcoming');
 
-  // Jump to the CRM with the exact Type/State/Event Type filters a campaign
-  // was built with, so "View Matching Clients" shows precisely that audience.
-  const goToCrmWithFilters = (filters) => {
+  // Jump to the CRM scoped to a campaign's exact real audience (their actual
+  // recipient keys, snapshot or live-matched) — not a re-derived category
+  // guess, since that could miss individually-added clients or include
+  // people who no longer match broad filters.
+  const goToCrmWithFilters = (keys, label) => {
     setPage('crm');
     setCrmFilter('all');
     setSearch('');
-    setCrmTypeFilter(filters.type || 'all');
-    setCrmStateFilter(filters.state || 'all');
-    setCrmEventTypeFilter(filters.eventType || 'all');
+    setCrmTypeFilter('all');
+    setCrmStateFilter('all');
+    setCrmEventTypeFilter('all');
+    setCrmKeyFilter(keys || []);
+    setCrmKeyFilterLabel(label || '');
   };
 
   const saveCustomCampaigns = (next) => {
@@ -3594,6 +3871,9 @@ export default function App() {
             setStateFilter={setCrmStateFilter}
             eventTypeFilter={crmEventTypeFilter}
             setEventTypeFilter={setCrmEventTypeFilter}
+            crmKeyFilter={crmKeyFilter}
+            crmKeyFilterLabel={crmKeyFilterLabel}
+            onClearKeyFilter={() => { setCrmKeyFilter(null); setCrmKeyFilterLabel(''); }}
           />
         )}
         {page === 'pipeline' && (
@@ -3657,3 +3937,4 @@ export default function App() {
       )}
     </div>
   );
+}
