@@ -1252,7 +1252,71 @@ function ColumnFilterSelect({ label, value, onChange, options }) {
 }
 
 
-function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastContacted, updateLastContacted, expanded, setExpanded, upcomingKeys, typeFilter, setTypeFilter, stateFilter, setStateFilter, eventTypeFilter, setEventTypeFilter, crmKeyFilter, crmKeyFilterLabel, onClearKeyFilter }) {
+// Inline edit for a client's name/phone/email — manages its own open/closed
+// state, so the CRM page doesn't need to track "which row is being edited."
+function EditableContactInfo({ client, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(client.name || '');
+  const [phone, setPhone] = useState(client.phone || '');
+  const [email, setEmail] = useState(client.email || '');
+
+  const startEditing = (e) => {
+    e.stopPropagation();
+    setName(client.name || '');
+    setPhone(client.phone || '');
+    setEmail(client.email || '');
+    setEditing(true);
+  };
+
+  const save = (e) => {
+    e.stopPropagation();
+    onSave(client.k, { name: name.trim(), phone: phone.trim(), email: email.trim() });
+    setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <button
+        onClick={startEditing}
+        style={{
+          padding: '5px 12px', borderRadius: 7, border: `1px solid ${COLORS.line}`, background: '#fff',
+          fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', color: COLORS.ink,
+        }}
+      >Edit Contact Info</button>
+    );
+  }
+
+  return (
+    <div style={{ background: '#fff', border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 12, marginBottom: 12 }} onClick={(e) => e.stopPropagation()}>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 10 }}>
+        Edit Contact Info
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ flex: '1 1 160px' }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, fontWeight: 700, color: COLORS.inkSoft, marginBottom: 4 }}>Name</div>
+          <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%', padding: '7px 10px', borderRadius: 7, border: `1px solid ${COLORS.line}`, fontFamily: 'Manrope, sans-serif', fontSize: 12.5, outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+        <div style={{ flex: '1 1 160px' }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, fontWeight: 700, color: COLORS.inkSoft, marginBottom: 4 }}>Phone</div>
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} style={{ width: '100%', padding: '7px 10px', borderRadius: 7, border: `1px solid ${COLORS.line}`, fontFamily: 'Manrope, sans-serif', fontSize: 12.5, outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+        <div style={{ flex: '1 1 200px' }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, fontWeight: 700, color: COLORS.inkSoft, marginBottom: 4 }}>Email</div>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} style={{ width: '100%', padding: '7px 10px', borderRadius: 7, border: `1px solid ${COLORS.line}`, fontFamily: 'Manrope, sans-serif', fontSize: 12.5, outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={(e) => { e.stopPropagation(); setEditing(false); }} style={{ padding: '6px 14px', borderRadius: 7, border: `1px solid ${COLORS.line}`, background: '#fff', fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: COLORS.ink }}>Cancel</button>
+        <button onClick={save} style={{ padding: '6px 14px', borderRadius: 7, border: 'none', background: COLORS.navy, color: '#fff', fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Save</button>
+      </div>
+      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 10.5, color: COLORS.inkSoft, marginTop: 8 }}>
+        Saved to the Sheet — this overrides what their order history shows, for everyone viewing this dashboard.
+      </div>
+    </div>
+  );
+}
+
+function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastContacted, updateLastContacted, expanded, setExpanded, upcomingKeys, typeFilter, setTypeFilter, stateFilter, setStateFilter, eventTypeFilter, setEventTypeFilter, crmKeyFilter, crmKeyFilterLabel, onClearKeyFilter, onUpdateClientInfo }) {
   const [pageNum, setPageNum] = useState(0);
   const upcomingMonthName = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleString('en-US', { month: 'long' });
 
@@ -1454,6 +1518,7 @@ function CrmPage({ clients, orders, filter, setFilter, search, setSearch, lastCo
 
               {isOpen && (
                 <div style={{ padding: '4px 18px 18px 18px', background: COLORS.cream }}>
+                  <EditableContactInfo client={c} onSave={onUpdateClientInfo} />
                   <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', margin: '10px 0 8px' }}>
                     Order history ({clientOrders.length})
                   </div>
@@ -1865,6 +1930,28 @@ const CAMPAIGN_LENGTH_OPTIONS = [
   { value: 90, label: '3 Months' },
 ];
 
+// Half-hour slots, 6:00 AM to 8:00 PM — covers normal business hours for
+// scheduling a campaign's send time.
+const SCHEDULE_TIME_OPTIONS = (() => {
+  const opts = [];
+  for (let h = 6; h <= 20; h++) {
+    for (const m of [0, 30]) {
+      const value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      const hour12 = h % 12 === 0 ? 12 : h % 12;
+      const ampm = h < 12 ? 'AM' : 'PM';
+      const label = `${hour12}:${String(m).padStart(2, '0')} ${ampm}`;
+      opts.push({ value, label });
+    }
+  }
+  return opts;
+})();
+
+// "14:30" -> "2:30 PM" — for displaying a stored scheduled time.
+function formatTimeLabel(value) {
+  const match = SCHEDULE_TIME_OPTIONS.find(o => o.value === value);
+  return match ? match.label : value;
+}
+
 function FormSelect({ label, value, onChange, children }) {
   return (
     <div style={{ flex: '1 1 160px', minWidth: 150 }}>
@@ -1907,9 +1994,10 @@ function ThresholdInput({ index, value, onChange }) {
   );
 }
 
-function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
+function CampaignBuilder({ clients, onCreateCampaign, onCreated, title, forceMode }) {
+  const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState('');
-  const [mode, setMode] = useState('broadcast'); // 'broadcast' | 'rolling'
+  const [mode, setMode] = useState(forceMode || 'broadcast'); // 'broadcast' | 'rolling'
   const [triggerField, setTriggerField] = useState('firstDate');
   const [lengthDays, setLengthDays] = useState(30);
   const [numEmails, setNumEmails] = useState(1);
@@ -1919,9 +2007,11 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
   const [eventTypeFilter, setEventTypeFilter] = useState('all');
   const [emails, setEmails] = useState(DEFAULT_EMAIL_TEMPLATES);
   const [manualKeys, setManualKeys] = useState([]); // individually-added clients, broadcast mode only
+  const [audienceMode, setAudienceMode] = useState('filtered'); // 'filtered' | 'individualOnly' — broadcast mode only
   const [customerSearch, setCustomerSearch] = useState('');
   const [sendTiming, setSendTiming] = useState('now'); // 'now' | 'scheduled' — broadcast mode only
   const [scheduledDate, setScheduledDate] = useState('');
+  const [scheduledTime, setScheduledTime] = useState('09:00');
 
   const eventTypeOptions = useMemo(() => {
     const set = new Set(clients.map(c => c.lastOcc).filter(Boolean));
@@ -1931,10 +2021,15 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
   const filters = { type: typeFilter, state: stateFilter, eventType: eventTypeFilter };
   const filterMatched = useMemo(() => clients.filter(c => clientMatchesFilters(c, filters)), [clients, typeFilter, stateFilter, eventTypeFilter]);
 
-  // Final audience = filter-matched clients, plus any individually hand-picked
-  // ones — de-duplicated, since someone might match both ways.
+  // Final audience: normally filter-matched clients plus any individually
+  // hand-picked ones. But "Specific People Only" ignores the filters
+  // entirely — the audience is exactly, and only, whoever's been added by
+  // name, for a genuine "just these people" send.
   const audience = useMemo(() => {
     if (mode !== 'broadcast') return filterMatched;
+    if (audienceMode === 'individualOnly') {
+      return manualKeys.map(k => clients.find(cl => cl.k === k)).filter(Boolean);
+    }
     const byKey = new Map(filterMatched.map(c => [c.k, c]));
     manualKeys.forEach(k => {
       if (!byKey.has(k)) {
@@ -1943,7 +2038,7 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
       }
     });
     return Array.from(byKey.values());
-  }, [filterMatched, manualKeys, clients, mode]);
+  }, [filterMatched, manualKeys, clients, mode, audienceMode]);
 
   const customerSearchResults = useMemo(() => {
     const q = customerSearch.trim().toLowerCase();
@@ -2011,10 +2106,12 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
       thresholds,
       filters,
       manualKeys: mode === 'broadcast' ? manualKeys : [],
+      audienceMode: mode === 'broadcast' ? audienceMode : 'filtered',
       audienceKeys: mode === 'broadcast' ? audience.map(c => c.k) : [],
       audienceCount: audience.length,
       createdAt: new Date().toISOString().slice(0, 10),
       scheduledStart: (mode === 'broadcast' && sendTiming === 'scheduled' && scheduledDate) ? scheduledDate : null,
+      scheduledTime: (mode === 'broadcast' && sendTiming === 'scheduled' && scheduledDate) ? scheduledTime : null,
       emails: emails.slice(0, numEmails),
     });
     setName('');
@@ -2026,8 +2123,10 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
     setThresholds([0]);
     setEmails(DEFAULT_EMAIL_TEMPLATES);
     setManualKeys([]);
+    setAudienceMode('filtered');
     setSendTiming('now');
     setScheduledDate('');
+    setScheduledTime('09:00');
     if (onCreated) onCreated(newId);
   };
 
@@ -2037,14 +2136,34 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
 
   return (
     <div style={{
-      background: '#fff', borderRadius: 16, border: `1px solid ${COLORS.line}`, padding: '20px 22px 22px',
-      boxShadow: '0 2px 10px rgba(42,36,64,0.04)',
+      background: '#fff', borderRadius: 16, border: `1px solid ${COLORS.line}`,
+      boxShadow: '0 2px 10px rgba(42,36,64,0.04)', marginBottom: 14, overflow: 'hidden',
     }}>
-      <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 19, fontWeight: 600, color: COLORS.ink }}>Create New Campaign</div>
-      <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.inkSoft, marginTop: 2, marginBottom: 18 }}>
-        Name it, choose how it's triggered, filter your client list, and write the copy — this campaign
-        will track due dates and stages automatically, the same way Re-Engagement does.
+      <div
+        onClick={() => setExpanded(v => !v)}
+        style={{ padding: '18px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14, cursor: 'pointer' }}
+      >
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 16.5, fontWeight: 600, color: COLORS.ink }}>{title || 'Create New Campaign'}</div>
+            {forceMode === 'broadcast' && (
+              <span style={{
+                fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 999,
+                background: 'rgba(214,169,74,0.16)', color: COLORS.goldDeep, fontFamily: 'Manrope, sans-serif',
+              }}>One-Time Send</span>
+            )}
+          </div>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4 }}>
+            {forceMode === 'broadcast'
+              ? 'Pick your audience and send once, right away or on a schedule you set.'
+              : "Name it, choose how it's triggered, filter your client list, and write the copy."}
+          </div>
+        </div>
       </div>
+
+      {expanded && (
+      <div style={{ padding: '0 22px 22px' }}>
+
 
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6 }}>
@@ -2062,37 +2181,41 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
       </div>
 
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
-          Campaign Type
-        </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setMode('broadcast')}
-            style={{
-              flex: '1 1 220px', textAlign: 'left', padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
-              border: mode === 'broadcast' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
-              background: mode === 'broadcast' ? 'rgba(214,169,74,0.08)' : '#fff',
-            }}
-          >
-            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, fontWeight: 700, color: COLORS.ink }}>One-Time Send</div>
-            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
-              Send to everyone matching right now, starting today — no matter when they became a client.
+        {!forceMode && (
+          <>
+            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
+              Campaign Type
             </div>
-          </button>
-          <button
-            onClick={() => setMode('rolling')}
-            style={{
-              flex: '1 1 220px', textAlign: 'left', padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
-              border: mode === 'rolling' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
-              background: mode === 'rolling' ? 'rgba(214,169,74,0.08)' : '#fff',
-            }}
-          >
-            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, fontWeight: 700, color: COLORS.ink }}>Ongoing</div>
-            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
-              Keeps running — each client's own countdown starts from a date on their record.
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setMode('broadcast')}
+                style={{
+                  flex: '1 1 220px', textAlign: 'left', padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+                  border: mode === 'broadcast' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                  background: mode === 'broadcast' ? 'rgba(214,169,74,0.08)' : '#fff',
+                }}
+              >
+                <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, fontWeight: 700, color: COLORS.ink }}>One-Time Send</div>
+                <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
+                  Send to everyone matching right now, starting today — no matter when they became a client.
+                </div>
+              </button>
+              <button
+                onClick={() => setMode('rolling')}
+                style={{
+                  flex: '1 1 220px', textAlign: 'left', padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+                  border: mode === 'rolling' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                  background: mode === 'rolling' ? 'rgba(214,169,74,0.08)' : '#fff',
+                }}
+              >
+                <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, fontWeight: 700, color: COLORS.ink }}>Ongoing</div>
+                <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
+                  Keeps running — each client's own countdown starts from a date on their record.
+                </div>
+              </button>
             </div>
-          </button>
-        </div>
+          </>
+        )}
       </div>
 
       {mode === 'broadcast' && (
@@ -2120,16 +2243,29 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
               }}
             >Schedule for a Date</button>
             {sendTiming === 'scheduled' && (
-              <input
-                type="date"
-                value={scheduledDate}
-                min={new Date().toISOString().slice(0, 10)}
-                onChange={(e) => setScheduledDate(e.target.value)}
-                style={{
-                  padding: '9px 12px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
-                  fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink, outline: 'none',
-                }}
-              />
+              <>
+                <input
+                  type="date"
+                  value={scheduledDate}
+                  min={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setScheduledDate(e.target.value)}
+                  style={{
+                    padding: '9px 12px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
+                    fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink, outline: 'none',
+                  }}
+                />
+                <select
+                  value={scheduledTime}
+                  onChange={(e) => setScheduledTime(e.target.value)}
+                  style={{
+                    padding: '9px 12px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
+                    fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink, outline: 'none',
+                    background: '#fff', cursor: 'pointer',
+                  }}
+                >
+                  {SCHEDULE_TIME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </>
             )}
           </div>
           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11, color: COLORS.inkSoft, marginTop: 6 }}>
@@ -2155,29 +2291,64 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
         <FormSelect label="Number of Emails" value={numEmails} onChange={(v) => setNumEmailsClamped(parseInt(v, 10))}>
           {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n} Email{n === 1 ? '' : 's'}</option>)}
         </FormSelect>
-        <FormSelect label="Client Type" value={typeFilter} onChange={setTypeFilter}>
-          <option value="all">All Types</option>
-          <option value="Repeat">Repeat</option>
-          <option value="First-Time">First-Time</option>
-        </FormSelect>
-        <FormSelect label="State" value={stateFilter} onChange={setStateFilter}>
-          <option value="all">All States</option>
-          <option value="Texas">Texas</option>
-          <option value="California">California</option>
-        </FormSelect>
-        <FormSelect label="Event Type" value={eventTypeFilter} onChange={setEventTypeFilter}>
-          <option value="all">All Event Types</option>
-          {eventTypeOptions.map(o => <option key={o} value={o}>{o}</option>)}
-        </FormSelect>
+        {(mode !== 'broadcast' || audienceMode === 'filtered') && (
+          <>
+            <FormSelect label="Client Type" value={typeFilter} onChange={setTypeFilter}>
+              <option value="all">All Types</option>
+              <option value="Repeat">Repeat</option>
+              <option value="First-Time">First-Time</option>
+            </FormSelect>
+            <FormSelect label="State" value={stateFilter} onChange={setStateFilter}>
+              <option value="all">All States</option>
+              <option value="Texas">Texas</option>
+              <option value="California">California</option>
+            </FormSelect>
+            <FormSelect label="Event Type" value={eventTypeFilter} onChange={setEventTypeFilter}>
+              <option value="all">All Event Types</option>
+              {eventTypeOptions.map(o => <option key={o} value={o}>{o}</option>)}
+            </FormSelect>
+          </>
+        )}
       </div>
 
       {mode === 'broadcast' && (
         <div style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>
+            Who Should Get This?
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setAudienceMode('filtered')}
+              style={{
+                padding: '9px 16px', borderRadius: 999, cursor: 'pointer',
+                border: audienceMode === 'filtered' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                background: audienceMode === 'filtered' ? 'rgba(214,169,74,0.08)' : '#fff',
+                fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, color: COLORS.ink,
+              }}
+            >Match by Filters</button>
+            <button
+              onClick={() => setAudienceMode('individualOnly')}
+              style={{
+                padding: '9px 16px', borderRadius: 999, cursor: 'pointer',
+                border: audienceMode === 'individualOnly' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                background: audienceMode === 'individualOnly' ? 'rgba(214,169,74,0.08)' : '#fff',
+                fontFamily: 'Manrope, sans-serif', fontSize: 12.5, fontWeight: 700, color: COLORS.ink,
+              }}
+            >Specific People Only</button>
+          </div>
+          <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11, color: COLORS.inkSoft, marginTop: 6, marginBottom: 12 }}>
+            {audienceMode === 'filtered'
+              ? 'Uses the Client Type / State / Event Type filters above, plus anyone you add by name below.'
+              : "Ignores the filters entirely — this send goes to exactly, and only, the specific people you add below."}
+          </div>
+
           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, fontWeight: 700, color: COLORS.inkSoft, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6 }}>
-            Add Individual Customers
+            {audienceMode === 'individualOnly' ? 'Add Your Send List' : 'Add Individual Customers'}
           </div>
           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
-            On top of the filters above — search by name or email to add specific people regardless of whether they match.
+            {audienceMode === 'individualOnly'
+              ? 'Search by name or email and add exactly who should get this — e.g. just Justin and Chandra Moschina.'
+              : 'On top of the filters above — search by name or email to add specific people regardless of whether they match.'}
           </div>
           <div style={{ position: 'relative' }}>
             <input
@@ -2276,9 +2447,12 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
         paddingTop: 16, borderTop: `1px solid ${COLORS.line}`,
       }}>
         <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink }}>
-          <strong style={{ color: audience.length > 0 ? COLORS.goldDeep : COLORS.inkSoft }}>{audience.length}</strong> matching client{audience.length === 1 ? '' : 's'}
+          <strong style={{ color: audience.length > 0 ? COLORS.goldDeep : COLORS.inkSoft }}>{audience.length}</strong>{' '}
+          {mode === 'broadcast' && audienceMode === 'individualOnly'
+            ? `specific ${audience.length === 1 ? 'person' : 'people'} selected`
+            : `matching client${audience.length === 1 ? '' : 's'}`}
           {mode === 'rolling' && <span style={{ color: COLORS.inkSoft }}> right now — this list will grow as more clients qualify</span>}
-          {mode === 'broadcast' && manualKeys.length > 0 && <span style={{ color: COLORS.inkSoft }}> (includes {manualKeys.length} individually added)</span>}
+          {mode === 'broadcast' && audienceMode === 'filtered' && manualKeys.length > 0 && <span style={{ color: COLORS.inkSoft }}> (includes {manualKeys.length} individually added)</span>}
         </div>
         <button
           onClick={handleCreate}
@@ -2294,6 +2468,8 @@ function CampaignBuilder({ clients, onCreateCampaign, onCreated }) {
           Create Campaign
         </button>
       </div>
+      </div>
+      )}
     </div>
   );
 }
@@ -2311,6 +2487,9 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
   const [draftStateFilter, setDraftStateFilter] = useState(campaign.filters.state);
   const [draftEventTypeFilter, setDraftEventTypeFilter] = useState(campaign.filters.eventType);
   const [draftThresholds, setDraftThresholds] = useState(campaign.thresholds);
+  const [draftAudienceMode, setDraftAudienceMode] = useState(campaign.audienceMode || 'filtered');
+  const [draftManualKeys, setDraftManualKeys] = useState(campaign.manualKeys || []);
+  const [draftCustomerSearch, setDraftCustomerSearch] = useState('');
   const isCancelled = campaign.status === 'cancelled';
   const isScheduledFuture = campaign.mode === 'broadcast' && campaign.scheduledStart
     && new Date(campaign.scheduledStart + 'T00:00:00') > new Date(new Date().toDateString());
@@ -2320,24 +2499,52 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
     return Array.from(set).sort();
   }, [clients]);
 
+  const draftCustomerSearchResults = useMemo(() => {
+    const q = draftCustomerSearch.trim().toLowerCase();
+    if (!q) return [];
+    return clients
+      .filter(c => !draftManualKeys.includes(c.k))
+      .filter(c => (c.name || '').toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [draftCustomerSearch, clients, draftManualKeys]);
+
   const startEditing = () => {
     setDraftName(campaign.name);
     setDraftTypeFilter(campaign.filters.type);
     setDraftStateFilter(campaign.filters.state);
     setDraftEventTypeFilter(campaign.filters.eventType);
     setDraftThresholds(campaign.thresholds);
+    setDraftAudienceMode(campaign.audienceMode || 'filtered');
+    setDraftManualKeys(campaign.manualKeys || []);
+    setDraftCustomerSearch('');
     setEditingDetails(true);
     setExpanded(true);
   };
 
   const draftFilters = { type: draftTypeFilter, state: draftStateFilter, eventType: draftEventTypeFilter };
-  const draftAudience = useMemo(() => clients.filter(c => clientMatchesFilters(c, draftFilters)), [clients, draftTypeFilter, draftStateFilter, draftEventTypeFilter]);
+  const draftFilterMatched = useMemo(() => clients.filter(c => clientMatchesFilters(c, draftFilters)), [clients, draftTypeFilter, draftStateFilter, draftEventTypeFilter]);
+  const draftAudience = useMemo(() => {
+    if (campaign.mode !== 'broadcast') return draftFilterMatched;
+    if (draftAudienceMode === 'individualOnly') {
+      return draftManualKeys.map(k => clients.find(cl => cl.k === k)).filter(Boolean);
+    }
+    const byKey = new Map(draftFilterMatched.map(c => [c.k, c]));
+    draftManualKeys.forEach(k => {
+      if (!byKey.has(k)) {
+        const c = clients.find(cl => cl.k === k);
+        if (c) byKey.set(k, c);
+      }
+    });
+    return Array.from(byKey.values());
+  }, [draftFilterMatched, draftManualKeys, clients, campaign.mode, draftAudienceMode]);
 
   const saveDetails = () => {
     const patch = {
       name: draftName.trim() || campaign.name,
       filters: draftFilters,
       thresholds: draftThresholds,
+      audienceMode: draftAudienceMode,
+      manualKeys: draftManualKeys,
     };
     if (campaign.mode === 'broadcast') {
       patch.audienceKeys = draftAudience.map(c => c.k);
@@ -2400,7 +2607,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
               <span style={{
                 fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 999,
                 background: 'rgba(167,150,217,0.18)', color: COLORS.lavenderDeep, fontFamily: 'Manrope, sans-serif',
-              }}>Scheduled for {fmtDate(campaign.scheduledStart)}</span>
+              }}>Scheduled for {fmtDate(campaign.scheduledStart)}{campaign.scheduledTime ? ` at ${formatTimeLabel(campaign.scheduledTime)}` : ''}</span>
             )}
           </div>
           <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4 }}>
@@ -2459,7 +2666,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             }}>
               <span style={{ fontSize: 18 }}>🗓️</span>
               <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink }}>
-                This campaign is scheduled to become active on <strong>{fmtDate(campaign.scheduledStart)}</strong>.
+                This campaign is scheduled to become active on <strong>{fmtDate(campaign.scheduledStart)}{campaign.scheduledTime ? ` at ${formatTimeLabel(campaign.scheduledTime)}` : ''}</strong>.
                 The copy and audience below are ready — there's simply nothing to send until that date arrives.
               </div>
             </div>
@@ -2480,22 +2687,97 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
                   }}
                 />
               </div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-                <FormSelect label="Client Type" value={draftTypeFilter} onChange={setDraftTypeFilter}>
-                  <option value="all">All Types</option>
-                  <option value="Repeat">Repeat</option>
-                  <option value="First-Time">First-Time</option>
-                </FormSelect>
-                <FormSelect label="State" value={draftStateFilter} onChange={setDraftStateFilter}>
-                  <option value="all">All States</option>
-                  <option value="Texas">Texas</option>
-                  <option value="California">California</option>
-                </FormSelect>
-                <FormSelect label="Event Type" value={draftEventTypeFilter} onChange={setDraftEventTypeFilter}>
-                  <option value="all">All Event Types</option>
-                  {eventTypeOptions.map(o => <option key={o} value={o}>{o}</option>)}
-                </FormSelect>
-              </div>
+              {campaign.mode === 'broadcast' && (
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <button
+                    onClick={() => setDraftAudienceMode('filtered')}
+                    style={{
+                      padding: '7px 14px', borderRadius: 999, cursor: 'pointer',
+                      border: draftAudienceMode === 'filtered' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                      background: draftAudienceMode === 'filtered' ? 'rgba(214,169,74,0.08)' : '#fff',
+                      fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 700, color: COLORS.ink,
+                    }}
+                  >Match by Filters</button>
+                  <button
+                    onClick={() => setDraftAudienceMode('individualOnly')}
+                    style={{
+                      padding: '7px 14px', borderRadius: 999, cursor: 'pointer',
+                      border: draftAudienceMode === 'individualOnly' ? `1.5px solid ${COLORS.gold}` : `1px solid ${COLORS.line}`,
+                      background: draftAudienceMode === 'individualOnly' ? 'rgba(214,169,74,0.08)' : '#fff',
+                      fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 700, color: COLORS.ink,
+                    }}
+                  >Specific People Only</button>
+                </div>
+              )}
+              {(campaign.mode !== 'broadcast' || draftAudienceMode === 'filtered') && (
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <FormSelect label="Client Type" value={draftTypeFilter} onChange={setDraftTypeFilter}>
+                    <option value="all">All Types</option>
+                    <option value="Repeat">Repeat</option>
+                    <option value="First-Time">First-Time</option>
+                  </FormSelect>
+                  <FormSelect label="State" value={draftStateFilter} onChange={setDraftStateFilter}>
+                    <option value="all">All States</option>
+                    <option value="Texas">Texas</option>
+                    <option value="California">California</option>
+                  </FormSelect>
+                  <FormSelect label="Event Type" value={draftEventTypeFilter} onChange={setDraftEventTypeFilter}>
+                    <option value="all">All Event Types</option>
+                    {eventTypeOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                  </FormSelect>
+                </div>
+              )}
+              {campaign.mode === 'broadcast' && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      value={draftCustomerSearch}
+                      onChange={(e) => setDraftCustomerSearch(e.target.value)}
+                      placeholder={draftAudienceMode === 'individualOnly' ? 'Search customers by name or email...' : 'Add specific people on top of the filters above...'}
+                      style={{
+                        width: '100%', padding: '8px 10px', borderRadius: 8, border: `1px solid ${COLORS.line}`,
+                        fontFamily: 'Manrope, sans-serif', fontSize: 13, color: COLORS.ink, outline: 'none', boxSizing: 'border-box',
+                      }}
+                    />
+                    {draftCustomerSearchResults.length > 0 && (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: '#fff',
+                        border: `1px solid ${COLORS.line}`, borderRadius: 9, boxShadow: '0 6px 16px rgba(42,36,64,0.1)',
+                        zIndex: 5, maxHeight: 220, overflowY: 'auto',
+                      }}>
+                        {draftCustomerSearchResults.map(c => (
+                          <div
+                            key={c.k}
+                            onClick={() => { setDraftManualKeys(prev => [...prev, c.k]); setDraftCustomerSearch(''); }}
+                            style={{ padding: '9px 12px', cursor: 'pointer', borderBottom: `1px solid ${COLORS.line}` }}
+                          >
+                            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 13, fontWeight: 700, color: COLORS.ink }}>{c.name}</div>
+                            <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 11.5, color: COLORS.inkSoft }}>{c.email}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {draftManualKeys.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      {draftManualKeys.map(k => {
+                        const c = clients.find(cl => cl.k === k);
+                        return (
+                          <span key={k} style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 10px', borderRadius: 999,
+                            background: 'rgba(167,150,217,0.15)', color: COLORS.lavenderDeep, fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 600,
+                          }}>
+                            {c ? c.name : k}
+                            <button onClick={() => setDraftManualKeys(prev => prev.filter(mk => mk !== k))} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: COLORS.lavenderDeep, display: 'flex' }}>
+                              <X size={12} />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
                 {Array.from({ length: campaign.numEmails }).map((_, i) => (
                   <ThresholdInput
@@ -2506,7 +2788,10 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ fontFamily: 'Manrope, sans-serif', fontSize: 12.5, color: COLORS.ink }}>
-                  <strong style={{ color: COLORS.goldDeep }}>{draftAudience.length}</strong> matching client{draftAudience.length === 1 ? '' : 's'}
+                  <strong style={{ color: COLORS.goldDeep }}>{draftAudience.length}</strong>{' '}
+                  {campaign.mode === 'broadcast' && draftAudienceMode === 'individualOnly'
+                    ? `specific ${draftAudience.length === 1 ? 'person' : 'people'} selected`
+                    : `matching client${draftAudience.length === 1 ? '' : 's'}`}
                   {campaign.mode === 'broadcast' && <span style={{ color: COLORS.inkSoft }}> — saving will refresh the enrolled list to this</span>}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -2584,6 +2869,34 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             >{dueOnly ? `Showing Due Only (${dueCount})` : `Showing All (${rows.length})`}</button>
           </div>
 
+          {(() => {
+            const sendable = visibleRows.filter(r => r.nextEmailNum);
+            const targetEmailNum = sendable.length > 0 ? sendable[0].nextEmailNum : null;
+            const sameGroup = targetEmailNum ? sendable.filter(r => r.nextEmailNum === targetEmailNum) : [];
+            const canSendGroup = campaign.mode === 'broadcast' && !isCancelled && sameGroup.length > 0;
+            const sendGroupViaGmail = () => {
+              if (!canSendGroup) return;
+              const template = campaign.emails[targetEmailNum - 1];
+              const genericData = { firstName: 'there', occasion: 'your upcoming event', campaignName: campaign.name };
+              const subject = fillTemplate(template.subject, genericData);
+              const body = htmlToPlainText(fillTemplate(template.body, genericData));
+              const to = sameGroup.map(r => r.email).join(',');
+              window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
+            };
+            return canSendGroup ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 10, marginTop: -4 }}>
+                <button
+                  onClick={sendGroupViaGmail}
+                  style={{
+                    padding: '7px 14px', borderRadius: 8, border: 'none', background: COLORS.navy, color: '#fff',
+                    fontFamily: 'Manrope, sans-serif', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}
+                >Gmail — All {sameGroup.length} Shown (To:)</button>
+              </div>
+            ) : null;
+          })()}
+
           <div style={{ background: '#fff', borderRadius: 12, border: `1px solid ${COLORS.line}`, overflow: 'hidden' }}>
             <div style={{
               display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.7fr 1.6fr',
@@ -2599,7 +2912,7 @@ function CustomCampaignCard({ campaign, clients, activity, onUpdateStage, onView
             {visibleRows.length === 0 && (
               <div style={{ padding: '24px 0', textAlign: 'center', fontFamily: 'Manrope, sans-serif', color: COLORS.inkSoft, fontSize: 13 }}>
                 {isScheduledFuture
-                  ? `Scheduled for ${fmtDate(campaign.scheduledStart)} — nothing to send until then.`
+                  ? `Scheduled for ${fmtDate(campaign.scheduledStart)}${campaign.scheduledTime ? ' at ' + formatTimeLabel(campaign.scheduledTime) : ''} — nothing to send until then.`
                   : dueOnly ? 'No one is due for an email right now.' : 'No clients with a valid email matched this campaign.'}
               </div>
             )}
@@ -2695,7 +3008,8 @@ function EmailMarketingPage({ anniversaries, campaignStage, updateCampaignStage,
       </div>
 
       <div style={{ marginTop: 80 }}>
-        <CampaignBuilder clients={clients} onCreateCampaign={onCreateCampaign} onCreated={setNewlyCreatedId} />
+        <CampaignBuilder clients={clients} onCreateCampaign={onCreateCampaign} onCreated={setNewlyCreatedId} title="Create New Campaign" />
+        <CampaignBuilder clients={clients} onCreateCampaign={onCreateCampaign} onCreated={setNewlyCreatedId} title="Bulk Send" forceMode="broadcast" />
       </div>
     </div>
   );
@@ -3458,6 +3772,7 @@ export default function App() {
   const [expanded, setExpanded] = useState(null);
   const [lastContacted, setLastContacted] = useState({});
   const [campaignStage, setCampaignStage] = useState({});
+  const [clientOverrides, setClientOverrides] = useState({}); // {[key]: {name,email,phone}} — manual edits, saved to the sheet
   const [customCampaigns, setCustomCampaigns] = useState([]);
   const [reEngageEmails, setReEngageEmails] = useState(REENGAGE_DEFAULT_EMAILS);
   const [campaignActivity, setCampaignActivity] = useState({}); // { [campaignId]: { [clientKey]: stage } }
@@ -3523,17 +3838,19 @@ export default function App() {
   // two separate pieces of local state the UI actually reads.
   const applyContacts = (contacts) => {
     if (!contacts) return;
-    const dates = {}, stages = {};
+    const dates = {}, stages = {}, overrides = {};
     Object.entries(contacts).forEach(([k, v]) => {
       if (v && typeof v === 'object') {
         if (v.date) dates[k] = v.date;
         if (v.stage) stages[k] = v.stage;
+        if (v.name || v.email || v.phone) overrides[k] = { name: v.name || '', email: v.email || '', phone: v.phone || '' };
       } else if (v) {
         dates[k] = v; // backward-compatible: older sheet format was a flat date string
       }
     });
     setLastContacted(dates);
     setCampaignStage(stages);
+    setClientOverrides(overrides);
   };
 
   // Both "Last Contacted" and "Campaign Stage" live in the same tab on the
@@ -3557,6 +3874,16 @@ export default function App() {
   const updateLastContacted = (key, dateStr, name) => {
     setLastContacted(prev => ({ ...prev, [key]: dateStr })); // optimistic UI update
     writeContact(key, name, { date: dateStr });
+  };
+
+  // Manual edits to a client's name/email/phone — saved to the same Sheet
+  // tab as Last Contacted, so they're shared and durable, not just local.
+  const updateClientInfo = (key, fields) => {
+    setClientOverrides(prev => ({
+      ...prev,
+      [key]: { ...(prev[key] || {}), ...fields },
+    }));
+    writeContact(key, fields.name, { email: fields.email, phone: fields.phone });
   };
 
   const updateCampaignStage = (key, stage, name) => {
@@ -3667,7 +3994,23 @@ export default function App() {
   // Merge frozen history + live (or fallback) orders + locally-converted won
   // leads, then derive everything else from that
   const allOrders = useMemo(() => [...STATIC_ORDERS, ...liveOrders, ...convertedOrders], [liveOrders, convertedOrders]);
-  const clients = useMemo(() => computeClients(allOrders), [allOrders]);
+  const rawClients = useMemo(() => computeClients(allOrders), [allOrders]);
+  // A manual edit to a client's name/email/phone wins over whatever their
+  // order history happens to say — saved to the Sheet, so it sticks even
+  // after the next sync recomputes everyone from orders again.
+  const clients = useMemo(() => {
+    if (!clientOverrides || Object.keys(clientOverrides).length === 0) return rawClients;
+    return rawClients.map(c => {
+      const o = clientOverrides[c.k];
+      if (!o) return c;
+      return {
+        ...c,
+        name: o.name || c.name,
+        email: o.email || c.email,
+        phone: o.phone || c.phone,
+      };
+    });
+  }, [rawClients, clientOverrides]);
   const mergedData = useMemo(() => ({ orders: allOrders, clients }), [allOrders, clients]);
 
   const stats = useMemo(() => computeStats(mergedData), [mergedData]);
@@ -3950,6 +4293,7 @@ export default function App() {
             crmKeyFilter={crmKeyFilter}
             crmKeyFilterLabel={crmKeyFilterLabel}
             onClearKeyFilter={() => { setCrmKeyFilter(null); setCrmKeyFilterLabel(''); }}
+            onUpdateClientInfo={updateClientInfo}
           />
         )}
         {page === 'pipeline' && (
